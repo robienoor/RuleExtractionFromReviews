@@ -1,7 +1,6 @@
 from configparser import SafeConfigParser
-from tabulate import tabulate
 import nltk, json, time
-import pandas as pd
+from nltk.tokenize import TweetTokenizer
 import numpy as np
 from sklearn import feature_extraction
 
@@ -31,18 +30,68 @@ def getListOfContractions(fileName):
 
 def getListFromJSON(filename):
 
-    with open(filename) as json_data:
+    with open(filename, encoding='utf-8') as json_data:
 
         postsJson = json.load(json_data)
 
     return postsJson
 
+def positionOfNgram(words,hyp):
+    length = len(words)
+    for i, sublist in enumerate((hyp[i:i+length] for i in range(len(hyp)))):
+        if words==sublist:
+            return i
+    return None
 
 
 def checkSentenceWithList(wordList, sentences):
-    cv = feature_extraction.text.CountVectorizer(vocabulary=wordlist)
-    tagged = cv.fit_transform(sentences).toarray()
-    return np.sum(tagged, axis=1)
+
+    # Here we see which words from the wordlist appear in the sentences.
+    cv = feature_extraction.text.CountVectorizer(vocabulary=wordlist, ngram_range=(1, 3))
+    taggedSentences = cv.fit_transform(sentences).toarray() # This vector is of size (noOfSentences x noOfWordsinList)
+
+    taggedSentencesCutDown = taggedSentences > 0
+    taggedSentencesCutDown = np.column_stack(np.where(taggedSentencesCutDown)) # This is a list of tuples (sentence, wordIndex)
+
+    # Add an extra column so we can store the position of the word found
+    taggedSentencesComplete = np.zeros((taggedSentencesCutDown.shape[0],taggedSentencesCutDown.shape[1]+1))
+    taggedSentencesComplete[:,:-1] = taggedSentencesCutDown
+
+    sentencesIdentified = np.unique(taggedSentencesCutDown[:,0])
+    wordsFound = taggedSentencesCutDown[:,1]
+
+    tknzr = TweetTokenizer()
+
+    wordList = np.array(wordList)
+
+
+    for idx, taggedSentence in enumerate(taggedSentencesCutDown):
+        sentence = sentences[taggedSentence[0]]
+        word = wordList[taggedSentence[1]]
+
+        sentenceTokenised = tknzr.tokenize(sentence)
+        posOfWordInSentence = positionOfNgram(tknzr.tokenize(word), sentenceTokenised)
+        taggedSentencesComplete[idx, 2] = posOfWordInSentence
+
+
+    return taggedSentencesComplete
+
+
+    # # This is a problem if words in wordsFound contain words of more than one word
+    # for sentIdx, sentencePos in enumerate sentencesIdentified:
+    #
+    #     wordsFoundSent = np.where(taggedSentencesCutDown[:,0] == sentencePos)
+    #     wordsFoundSent = taggedSentencesCutDown[wordsFoundSent]
+    #     # This is the list of strings that we found
+    #     wordsFoundSent = wordList[wordsFoundSent[:,1]]
+    #     sentenceTokenised = tknzr.tokenize(sentences[sentencePos])
+    #
+    #
+    #     for wordidx, word in enumerate(wordsFoundSent):
+    #         x = positionOfNgram(tknzr.tokenize(word), sentenceTokenised)
+    #         taggedSentencesComplete[]
+
+    # return np.sum(taggedSentences, axis=1)
 
 
 # Here we need to replace any contractions with their fully expanded word list
@@ -53,6 +102,9 @@ def processSentences(sentences):
 
 start = time.time()
 wordLists = {}
+segmentedwordlist = {}
+
+tknzr = TweetTokenizer()
 
 # import all the key word lists for annotation...these are all now Pandas series
 wordLists['inverterWords'] = getListOfFromCSV("Data/inverter-words.txt")
@@ -80,7 +132,6 @@ for postIdx, post in enumerate(allPosts):
 
     postsAnnotatedWithLists[postIdx] = annotatedPost
 
-
     endPost = time.time()
 
     print("Post " + str(postIdx) + ":   " + str(endPost - startPost))
@@ -89,6 +140,3 @@ end = time.time()
 
 print(end - start)
 print('here');
-
-
-
