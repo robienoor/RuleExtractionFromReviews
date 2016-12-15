@@ -2,6 +2,7 @@ from configparser import SafeConfigParser
 import nltk, json, time
 from nltk.tokenize import TweetTokenizer
 import numpy as np
+import pandas as pd
 from sklearn import feature_extraction
 import re
 from tabulate import tabulate
@@ -45,8 +46,17 @@ def positionOfNgram(words,hyp):
             return i
     return None
 
+def getSequenceArray(annotatedArrayFull):
 
-def checkSentenceWithList(wordList, sentences):
+    annotatedArray = annotatedArrayFull[:,[0,1,-1]]
+
+    cols = [str(x) for x in range(0, annotatedArray.shape[1])]
+    df = pd.DataFrame(annotatedArray)
+    df.columns = cols
+    df = df.pivot_table(index=['0','1'], columns=df.groupby(['0','1']).cumcount()+2, values='2', fill_value=0).reset_index()
+    return df
+
+def checkSentenceWithList(wordlist, sentences):
 
     # Here we see which words from the wordlist appear in the sentences.
     cv = feature_extraction.text.CountVectorizer(vocabulary=wordlist, ngram_range=(1, 3))
@@ -64,12 +74,12 @@ def checkSentenceWithList(wordList, sentences):
 
     tknzr = TweetTokenizer()
 
-    wordList = np.array(wordList)
+    wordList = np.array(wordlist)
 
 
     for idx, taggedSentence in enumerate(taggedSentencesCutDown):
         sentence = sentences[taggedSentence[0]]
-        word = wordList[taggedSentence[1]]
+        word = wordlist[taggedSentence[1]]
 
         sentenceTokenised = tknzr.tokenize(sentence)
         posOfWordInSentence = positionOfNgram(tknzr.tokenize(word), sentenceTokenised)
@@ -86,86 +96,93 @@ def checkSentenceWithList(wordList, sentences):
 def processSentences(sentences):
     return sentences
 
+def getPostSeqeuences():
+    start = time.time()
+    wordLists = []
+    segmentedwordlist = {}
 
-start = time.time()
-wordLists = []
-segmentedwordlist = {}
+    tknzr = TweetTokenizer()
 
-tknzr = TweetTokenizer()
+    # import all the key word lists for annotation...these are all now Pandas series
+    wordLists.append(getListOfFromCSV("Data/inverter-words.txt"))
+    #wordLists['listOfContractions'] = getListOfContractions("Data/listOfContractions.ini")
+    wordLists.append([x.lower() for x in getListOfFromCSV("Data/listOfDiseases.csv")])
+    wordLists.append([x.lower() for x in getListOfFromCSV("Data/listOfDrugs.csv")])
+    wordLists.append([x.lower() for x in getListOfFromCSV("Data/listOfSymptoms.csv")])
+    wordLists.append([x.lower() for x in getListOfFromCSV("Data/negative-words.txt")])
+    wordLists.append([x.lower() for x in getListOfFromCSV("Data/positive-words.txt")])
 
-# import all the key word lists for annotation...these are all now Pandas series
-wordLists.append(getListOfFromCSV("Data/inverter-words.txt"))
-#wordLists['listOfContractions'] = getListOfContractions("Data/listOfContractions.ini")
-wordLists.append([x.lower() for x in getListOfFromCSV("Data/listOfDiseases.csv")])
-wordLists.append([x.lower() for x in getListOfFromCSV("Data/listOfDrugs.csv")])
-wordLists.append([x.lower() for x in getListOfFromCSV("Data/listOfSymptoms.csv")])
-wordLists.append([x.lower() for x in getListOfFromCSV("Data/negative-words.txt")])
-wordLists.append([x.lower() for x in getListOfFromCSV("Data/positive-words.txt")])
+    allPosts = getListFromJSON("Data/ForumPosts.json")
+    allPosts = allPosts[:3]
 
-allPosts = getListFromJSON("Data/ForumPosts.json")
+    # Initialise an empty array of zeros. We will iteratively append to this
+    allPostsAnnotated = np.zeros((1,5))
 
-postsAnnotatedWithLists = []
+    # Here we tag each sentence with the the provided wordlists
+    for postIdx, post in enumerate(allPosts):
 
-# Initialise an empty array of zeros. We will iteratively append to this
-allPostsAnnotated = np.zeros((1,5))
+        startPost = time.time()
 
-# Here we tag each sentence with the the provided wordlists
-for postIdx, post in enumerate(allPosts):
+        postAnnotated = np.zeros((1,5))
 
-    startPost = time.time()
+        sentences = [sentence.lower() for sentence in nltk.sent_tokenize(post['Post'])]
+        sentences = [re.sub('(?<=\.)(?=[a-zA-Z])', ' ', sentence) for sentence in sentences]
 
-    postAnnotated = np.zeros((1,5))
+        for wordListIdx, wordlist in enumerate(wordLists):
 
-    sentences = [sentence.lower() for sentence in nltk.sent_tokenize(post['Post'])]
-    sentences = [re.sub('(?<=\.)(?=[a-zA-Z])', ' ', sentence) for sentence in sentences]
+            postAnnotatedSingleList = checkSentenceWithList(wordlist, sentences)
 
-    for wordListIdx, wordlist in enumerate(wordLists):
+            if postAnnotatedSingleList.size <=0:
+                continue
 
-        postAnnotatedSingleList = checkSentenceWithList(wordlist, sentences)
+            # Append the postNo and the listNo
+            postCol = np.zeros((postAnnotatedSingleList.shape[0], 1))
+            postCol.fill(postIdx)
+            listNoCol = np.zeros((postAnnotatedSingleList.shape[0], 1))
+            listNoCol.fill(wordListIdx)
 
-        if postAnnotatedSingleList.size <=0:
-            continue
+            postAnnotatedSingleList = np.column_stack((postCol, postAnnotatedSingleList))
+            postAnnotatedSingleList = np.column_stack((postAnnotatedSingleList, listNoCol))
 
-        # Append the postNo and the listNo
-        postCol = np.zeros((postAnnotatedSingleList.shape[0], 1))
-        postCol.fill(postIdx)
-        listNoCol = np.zeros((postAnnotatedSingleList.shape[0], 1))
-        listNoCol.fill(wordListIdx)
+            # Sort the postAnnotated array by sentence number and then by word position. This way
+            # the list name column will preserve the sequence of words observed
+            postAnnotated = postAnnotated[np.lexsort((postAnnotated[:,3], postAnnotated[:,1]))]
 
-        postAnnotatedSingleList = np.column_stack((postCol, postAnnotatedSingleList))
-        postAnnotatedSingleList = np.column_stack((postAnnotatedSingleList, listNoCol))
-
-        if postIdx <= 0 and wordListIdx <= 0:
-            allPostsAnnotated = np.copy(postAnnotatedSingleList)
-            postAnnotated = np.copy(postAnnotatedSingleList)
-        else:
-            postAnnotated = np.vstack((postAnnotated, postAnnotatedSingleList))
-            allPostsAnnotated = np.vstack((allPostsAnnotated, postAnnotatedSingleList))
-
-        # Sort the postAnnotated array by sentence number and then by word position. This way
-        # the list name column will preserve the sequence of observances
-        postAnnotated = postAnnotated[np.lexsort((postAnnotated[:,3], postAnnotated[:,1]))]
-        print(tabulate(postAnnotated, headers='keys', tablefmt='psql'))
+            if postIdx <= 0 and wordListIdx <= 0:
+                allPostsAnnotated = np.copy(postAnnotatedSingleList)
+                postAnnotated = np.copy(postAnnotatedSingleList)
+            else:
+                postAnnotated = np.vstack((postAnnotated, postAnnotatedSingleList))
+                allPostsAnnotated = np.vstack((allPostsAnnotated, postAnnotatedSingleList))
 
 
-    endPost = time.time()
-    print("Post " + str(postIdx) + ":   " + str(endPost - startPost))
 
-end = time.time()
+            print(tabulate(postAnnotated, headers='keys', tablefmt='psql'))
 
 
-# Finally we end up with  a workable data structure. The structure looks as follows is:
-# | PostNo |   SentenceNo   |   WordPos |   WordListKey |
-# |--------|----------------|-----------|---------------|
-# | 0      |    0           | 12        | listOfDiseases|
-# | 0      |    0           | 5         | positiveWords |
-# | 0      |    0           | 19        | listOfSymptoms|
-# | 1      |    0           | 1         | positiveWords |
-# | 1      |    0           | 5         | negativeWords |
+        endPost = time.time()
+        print("Post " + str(postIdx) + ":   " + str(endPost - startPost))
+
+    end = time.time()
 
 
-print(tabulate(allPostsAnnotated, headers='keys', tablefmt='psql'))
+    # Finally we end up with  a workable data structure. The structure looks as follows is:
+    # | PostNo |   SentenceNo   |   WordPos |   WordListKey |
+    # |--------|----------------|-----------|---------------|
+    # | 0      |    0           | 12        | listOfDiseases|
+    # | 0      |    0           | 5         | positiveWords |
+    # | 0      |    0           | 19        | listOfSymptoms|
+    # | 1      |    0           | 1         | positiveWords |
+    # | 1      |    0           | 5         | negativeWords |
 
-print(end - start)
 
-print('here');
+    # We need to resort all posts by posts -> sentenceNo -> wordPosition. This way we preserve the sequence of wordlists
+    allPostsAnnotated = allPostsAnnotated[np.lexsort((allPostsAnnotated[:,3], allPostsAnnotated[:,1], allPostsAnnotated[:,0]))]
+    allPostsSequences = getSequenceArray(allPostsAnnotated)
+    print(tabulate(allPostsAnnotated, headers='keys', tablefmt='psql'))
+    print(tabulate(allPostsSequences, headers='keys', tablefmt='psql'))
+    print(end - start)
+
+    print('here');
+
+    return allPostsSequences
